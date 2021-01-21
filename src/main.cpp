@@ -66,31 +66,6 @@ really_inline uint64_t cmp_mask_against_input(simd_input in, uint8_t m) {
 }
 
 
-// return the quote mask (which is a half-open mask that covers the first
-// quote in a quote pair and everything in the quote pair) 
-// We also update the prev_iter_inside_quote value to
-// tell the next iteration whether we finished the final iteration inside a
-// quote pair; if so, this  inverts our behavior of  whether we're inside
-// quotes for the next iteration.
-
-really_inline uint64_t find_quote_mask(simd_input in, uint64_t &prev_iter_inside_quote) {
-  uint64_t quote_bits = cmp_mask_against_input(in, '"');
-
-#ifdef __AVX2__
-  uint64_t quote_mask = _mm_cvtsi128_si64(_mm_clmulepi64_si128(
-      _mm_set_epi64x(0ULL, quote_bits), _mm_set1_epi8(0xFF), 0));
-#elif defined(__ARM_NEON)
-  uint64_t quote_mask = vmull_p64( -1ULL, quote_bits);
-#endif
-  quote_mask ^= prev_iter_inside_quote;
-
-  // right shift of a signed value expected to be well-defined and standard
-  // compliant as of C++20,
-  // John Regher from Utah U. says this is fine code
-  prev_iter_inside_quote =
-      static_cast<uint64_t>(static_cast<int64_t>(quote_mask) >> 63);
-  return quote_mask;
-}
 
 
 // flatten out values in 'bits' assuming that they are are to have values of idx
@@ -163,8 +138,6 @@ really_inline void flatten_bits(uint32_t *base_ptr, uint32_t &base,
 // However, it seems to improve drastically the number of instructions per cycle.
 #define SIMDCSV_BUFFERING 
 bool find_indexes(const uint8_t * buf, size_t len, ParsedCSV & pcsv) {
-  // does the previous iteration end inside a double-quote pair?
-  uint64_t prev_iter_inside_quote = 0ULL;  // either all zeros or all ones
 #ifdef CRLF
   uint64_t prev_iter_cr_end = 0ULL; 
 #endif
@@ -184,8 +157,7 @@ bool find_indexes(const uint8_t * buf, size_t len, ParsedCSV & pcsv) {
         __builtin_prefetch(buf + internal_idx + 128);
 #endif
         simd_input in = fill_input(buf+internal_idx);
-        uint64_t quote_mask = find_quote_mask(in, prev_iter_inside_quote);
-        uint64_t sep = cmp_mask_against_input(in, ',');
+        uint64_t sep = cmp_mask_against_input(in, ' ');
 #ifdef CRLF
         uint64_t cr = cmp_mask_against_input(in, 0x0d);
         uint64_t cr_adjusted = (cr << 1) | prev_iter_cr_end;
@@ -195,7 +167,7 @@ bool find_indexes(const uint8_t * buf, size_t len, ParsedCSV & pcsv) {
 #else
         uint64_t end = cmp_mask_against_input(in, 0x0a);
 #endif
-        fields[b] = (end | sep) & ~quote_mask;
+        fields[b] = (end | sep);
       }
       for(size_t b = 0; b < SIMDCSV_BUFFERSIZE; b++){
         size_t internal_idx = 64 * b + idx;
@@ -210,8 +182,7 @@ bool find_indexes(const uint8_t * buf, size_t len, ParsedCSV & pcsv) {
       __builtin_prefetch(buf + idx + 128);
 #endif
       simd_input in = fill_input(buf+idx);
-      uint64_t quote_mask = find_quote_mask(in, prev_iter_inside_quote);
-      uint64_t sep = cmp_mask_against_input(in, ',');
+      uint64_t sep = cmp_mask_against_input(in, ' ');
 #ifdef CRLF
       uint64_t cr = cmp_mask_against_input(in, 0x0d);
       uint64_t cr_adjusted = (cr << 1) | prev_iter_cr_end;
@@ -226,7 +197,7 @@ bool find_indexes(const uint8_t * buf, size_t len, ParsedCSV & pcsv) {
     // then outside the quotes with LF so it's OK to "and off"
     // the quoted bits here. Some other quote convention would
     // need to be thought about carefully
-      uint64_t field_sep = (end | sep) & ~quote_mask;
+      uint64_t field_sep = (end | sep);
       flatten_bits(base_ptr, base, idx, field_sep);
   }
 #undef SIMDCSV_BUFFERSIZE

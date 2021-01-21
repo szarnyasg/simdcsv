@@ -209,7 +209,7 @@ int main(int argc, char * argv[]) {
   int c; 
   bool verbose = false;
   bool dump = false;
-  size_t iterations = 100;
+  size_t iterations = 1;
   //bool squash_counters = false; // unused.
 
   while ((c = getopt(argc, argv, "vdi:s")) != -1){
